@@ -1,0 +1,13 @@
+[package]
+name = "decky-macro-daemon"
+version = "0.1.8"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.104"
+env_logger = "0.11.11"
+evdev = "0.12.1"
+log = "0.4.34"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+signal-hook = "0.3.17"

@@ -1,0 +1,11 @@
+{
+  "name": "Decky Macro",
+  "author": "Oliver",
+  "flags": ["debug", "root"],
+  "api_version": 1,
+  "publish": {
+    "tags": ["macros", "automation", "root"],
+    "description": "Record and replay precise gamepad macros.",
+    "image": "https://opengraph.githubassets.com/1/SteamDeckHomebrew/PluginLoader"
+  }
+}
