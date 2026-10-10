@@ -1,9 +1,11 @@
 .PHONY: all clean
 
+# Delegates to build.sh so target selection (DECKY_MACRO_TARGET) and the
+# linker fallback live in a single place. Examples:
+#   make
+#   make DECKY_MACRO_TARGET=static
 all:
-	cargo build --release --target x86_64-unknown-linux-musl
-	mkdir -p ../bin
-	cp target/x86_64-unknown-linux-musl/release/decky-macro-daemon ../bin/decky-macro-daemon
+	DECKY_MACRO_TARGET="$(DECKY_MACRO_TARGET)" sh build.sh
 
 clean:
 	cargo clean
