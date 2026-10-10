@@ -6,6 +6,6 @@
   "publish": {
     "tags": ["macros", "automation", "root"],
     "description": "Record and replay precise gamepad macros.",
-    "image": "https://raw.githubusercontent.com/olivervbk/decky-macro/v1.1.1/assets/logo.jpg"
+    "image": "https://raw.githubusercontent.com/olivervbk/decky-macro/v1.1.2/assets/logo.jpg"
   }
 }

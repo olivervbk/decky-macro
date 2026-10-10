@@ -41,42 +41,26 @@ Because this plugin contains a compiled Rust backend, you must build it using No
    ```bash
    pnpm install
    ```
-4. Build and assemble a deployable plugin folder (clean → build → package):
+4. Build and assemble a deployable plugin folder:
    ```bash
-   pnpm run make          # native binary (host libc)
-   # or, for a SteamOS-compatible static binary:
-   pnpm run make:static
+   pnpm run build             # frontend bundle -> dist/
+   pnpm run build:backend     # Rust daemon -> bin/   (or build:backend:static)
+   pnpm run package           # -> target/decky-macro/
    ```
 5. Move the resulting `target/decky-macro` folder to your Steam Deck's `~/homebrew/plugins/` directory and restart your Deck.
 
-> Steps 4 can also be run individually: `pnpm run clean`, `pnpm run build` (or `build:static`), `pnpm run package`.
+### How the backend is built
 
-### Static (musl) builds — recommended for SteamOS
+`pnpm run build` only builds the **frontend** (`rollup -c`). The daemon is built by `pnpm run build:backend` locally, or by the **store CI** through `backend/Dockerfile` (image `ghcr.io/steamdeckhomebrew/holo-toolchain-rust`), which mounts `backend/` → `/backend` and the output → `/backend/out`, then runs `entrypoint.sh` → `build.sh`. That container is **SteamOS-based**, so the store ships a binary linked against the Deck's glibc.
 
-The daemon is a native binary. If you build it on a machine whose C library is newer than the Steam Deck's (for example **WSL/Ubuntu**), the resulting binary may fail to launch on the Deck with a `GLIBC_x.xx not found` error. Building against a **statically-linked musl libc** removes that dependency entirely.
-
-Static builds are **opt-in**. Select the target with the `DECKY_MACRO_TARGET` environment variable (`native` — the default — or `static`), or use the dedicated npm script:
+Building locally on a newer-libc host (WSL/Ubuntu) and running on the Deck can fail with `GLIBC_x.xx not found`. Use the static musl build instead — it runs anywhere:
 
 ```bash
-# One command: clean + static musl build + assemble a deployable folder
-pnpm run make:static
-
-# Or the same thing step by step
-pnpm run build:static
-pnpm run package
-
-# Or pick the target explicitly
-DECKY_MACRO_TARGET=static pnpm run build     # static (same as build:static)
-DECKY_MACRO_TARGET=native pnpm run build     # host libc (same as build:native)
-
-# Explicit Rust target triples are also accepted
-DECKY_MACRO_TARGET=x86_64-unknown-linux-musl pnpm run build
+pnpm run build:backend         # native (host libc)
+pnpm run build:backend:static  # static musl
 ```
 
-Notes:
-- The static target needs the Rust std for musl; `backend/build.sh` runs `rustup target add x86_64-unknown-linux-musl` for you when `rustup` is available.
-- If no C compiler (`cc`/`gcc`) is present, the script falls back to Rust's bundled `rust-lld` to link the musl binary.
-- Every build entry point (`pnpm run build`, `pnpm run build:static`, `backend/Makefile`) uses the same `backend/build.sh`, so the Decky plugin-database (store) builder — which runs `pnpm run build` — behaves consistently.
+`build:backend:static` installs the musl Rust std if needed, and links via Rust's bundled `rust-lld` when no C compiler is present. You only need it for local testing — the store CI builds a SteamOS-glibc binary.
 
 *(Note: If building for official release, remember to use the official `decky-cli` docker builder).*
 
