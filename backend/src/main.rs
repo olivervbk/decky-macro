@@ -1,6 +1,6 @@
 use anyhow::Result;
 use evdev::{Device, InputEvent, InputEventKind};
-use log::{info, warn};
+use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -11,10 +11,19 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+fn default_hold_ms() -> u64 {
+    500
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Config {
     trigger_record_code: u16,
     trigger_replay_code: u16,
+    // How long the trigger button must be held before activating, in milliseconds.
+    // 0 means "activate immediately on press". Defaults to 500 (0.5s) so that
+    // config files written before this field existed keep their old behaviour.
+    #[serde(default = "default_hold_ms")]
+    hold_duration_ms: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -69,6 +78,7 @@ fn load_or_create_config(path: &str) -> Config {
     Config {
         trigger_record_code: 317,
         trigger_replay_code: 318,
+        hold_duration_ms: default_hold_ms(),
     }
 }
 
@@ -130,6 +140,7 @@ fn main() -> Result<()> {
 
     info!("Loaded active slot: {:?}", active_macro_path);
     info!("Loops: {}, Cancel: {}", loops, cancel_on_input);
+    info!("Trigger hold duration: {} ms", config.hold_duration_ms);
 
     let (tx, rx) = mpsc::channel();
     let tx_discovery = tx.clone();
@@ -196,6 +207,8 @@ fn main() -> Result<()> {
         if reload_config.swap(false, Ordering::Relaxed) {
             info!("SIGHUP received, reloading global config from {:?}", config_path);
             config = load_or_create_config(&config_path);
+            info!("Reloaded config: record={}, replay={}, hold={}ms",
+                config.trigger_record_code, config.trigger_replay_code, config.hold_duration_ms);
         }
 
         let timeout = if is_replaying && replay_index < recorded_events.len() {
@@ -229,16 +242,22 @@ fn main() -> Result<()> {
 
             if is_record_btn {
                 if value == 1 {
-                    record_held_since = Some(now);
-                    record_triggered_this_press = false;
+                    // Only act on a fresh press edge; ignore duplicate/echoed
+                    // value==1 events so a 0ms hold cannot trigger twice.
+                    if record_held_since.is_none() {
+                        record_held_since = Some(now);
+                        record_triggered_this_press = false;
+                    }
                 } else if value == 0 {
                     record_held_since = None;
                 }
             }
             if is_replay_btn {
                 if value == 1 {
-                    replay_held_since = Some(now);
-                    replay_triggered_this_press = false;
+                    if replay_held_since.is_none() {
+                        replay_held_since = Some(now);
+                        replay_triggered_this_press = false;
+                    }
                 } else if value == 0 {
                     replay_held_since = None;
                 }
@@ -261,7 +280,7 @@ fn main() -> Result<()> {
         }
 
         if let Some(held) = record_held_since {
-            if !record_triggered_this_press && held.elapsed() >= Duration::from_millis(500) {
+            if !record_triggered_this_press && held.elapsed() >= Duration::from_millis(config.hold_duration_ms) {
                 if replay_held_since.is_none() {
                     record_triggered_this_press = true;
                     if state == State::Idle {
@@ -269,26 +288,37 @@ fn main() -> Result<()> {
                         recorded_events.clear();
                         record_start_time = Instant::now();
                         is_replaying = false;
-                        info!("Started recording to {:?}", active_macro_path);
+                        info!("Started recording to {:?} (hold {}ms)", active_macro_path, config.hold_duration_ms);
                     } else {
                         state = State::Idle;
-                        save_macro(&active_macro_path, &recorded_events);
-                        info!("Stopped recording. Saved {} events.", recorded_events.len());
+                        if recorded_events.is_empty() {
+                            error!("Recording stopped with no inputs; previous macro kept.");
+                            // Keep in-memory state consistent with the (unchanged)
+                            // file so a later replay uses the previous macro, if any.
+                            recorded_events = load_macro(&active_macro_path);
+                        } else {
+                            save_macro(&active_macro_path, &recorded_events);
+                            info!("Stopped recording. Saved {} events.", recorded_events.len());
+                        }
                     }
                 }
             }
         }
 
         if let Some(held) = replay_held_since {
-            if !replay_triggered_this_press && held.elapsed() >= Duration::from_millis(500) {
+            if !replay_triggered_this_press && held.elapsed() >= Duration::from_millis(config.hold_duration_ms) {
                 if record_held_since.is_none() {
                     replay_triggered_this_press = true;
-                    if state == State::Idle && !recorded_events.is_empty() {
-                        is_replaying = true;
-                        replay_index = 0;
-                        current_iteration = 0;
-                        replay_start_time = Instant::now();
-                        info!("Started playback from {:?}", active_macro_path);
+                    if state == State::Idle {
+                        if recorded_events.is_empty() {
+                            error!("Playback failed: no recorded inputs for {:?}", active_macro_path);
+                        } else {
+                            is_replaying = true;
+                            replay_index = 0;
+                            current_iteration = 0;
+                            replay_start_time = Instant::now();
+                            info!("Started playback from {:?} (hold {}ms)", active_macro_path, config.hold_duration_ms);
+                        }
                     }
                 }
             }

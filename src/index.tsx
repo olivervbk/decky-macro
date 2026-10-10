@@ -26,6 +26,12 @@ const saveSlotsData = callable<[data: any], boolean>("save_slots_data");
 const getDaemonState = callable<[], boolean>("get_daemon_state");
 const setDaemonState = callable<[is_running: boolean], boolean>("set_daemon_state");
 
+// Module-level flag read by the notification poller, which runs on the plugin
+// instance (outside <Content/>) and therefore has no access to the config state.
+// Error toasts are always shown; info toasts honour this flag. <Content/> keeps
+// it in sync with the `show_info_toasts` global config value.
+let showInfoToasts = true;
+
 const btnOptions = [
   { data: 317, label: "L3 (Left Stick Click)" },
   { data: 318, label: "R3 (Right Stick Click)" },
@@ -83,6 +89,62 @@ const SlotEditModal = ({ slotId, initialData, slotsData, updateSlots, closeModal
   );
 };
 
+const SettingsModal = ({ initialConfig, onSave, closeModal }: any) => {
+  const [recordCode, setRecordCode] = useState(initialConfig?.trigger_record_code ?? 317);
+  const [replayCode, setReplayCode] = useState(initialConfig?.trigger_replay_code ?? 318);
+  const [holdMs, setHoldMs] = useState(initialConfig?.hold_duration_ms ?? 500);
+
+  return (
+    <ConfirmModal
+      onCancel={closeModal}
+      onOK={() => {
+        onSave({
+          ...initialConfig,
+          trigger_record_code: recordCode,
+          trigger_replay_code: replayCode,
+          hold_duration_ms: holdMs,
+        });
+        closeModal();
+      }}
+      strTitle="Daemon Settings"
+    >
+      <div style={{ padding: "0 0 20px 0" }}>
+        <div style={{ fontSize: "11px", color: "#bbb", marginBottom: "12px", lineHeight: "1.3" }}>
+          These settings are read when the daemon starts. Stop the daemon before changing them.
+        </div>
+
+        <div style={{ marginBottom: "5px" }}><b>Record Trigger:</b></div>
+        <Dropdown
+          rgOptions={btnOptions}
+          selectedOption={recordCode}
+          onChange={(opt: any) => setRecordCode(opt.data)}
+        />
+
+        <div style={{ marginTop: "12px", marginBottom: "5px" }}><b>Replay Trigger:</b></div>
+        <Dropdown
+          rgOptions={btnOptions}
+          selectedOption={replayCode}
+          onChange={(opt: any) => setReplayCode(opt.data)}
+        />
+
+        <div style={{ marginTop: "12px" }}>
+          <SliderField
+            label="Trigger hold time"
+            description="How long to hold Record/Replay before it activates (0 = trigger on press)"
+            value={holdMs / 1000}
+            min={0}
+            max={2}
+            step={0.1}
+            showValue={true}
+            valueSuffix="s"
+            onChange={(v: number) => setHoldMs(Math.round(v * 1000))}
+          />
+        </div>
+      </div>
+    </ConfirmModal>
+  );
+};
+
 function Content() {
   const [globalConfig, setGlobalConfig] = useState<any>(null);
   const [slotsData, setSlotsData] = useState<any>(null);
@@ -93,6 +155,11 @@ function Content() {
     getSlotsData().then(setSlotsData);
     getDaemonState().then(setIsDaemonRunning);
   }, []);
+
+  // Keep the module-level toast flag (read by the notification poller) in sync.
+  useEffect(() => {
+    showInfoToasts = globalConfig ? (globalConfig.show_info_toasts ?? true) : true;
+  }, [globalConfig]);
 
   const setGlobal = async (newConfig: any) => {
     setGlobalConfig(newConfig);
@@ -162,6 +229,16 @@ function Content() {
     );
   };
 
+  const openSettings = () => {
+    if (!globalConfig) return;
+    showModal(
+      <SettingsModal
+        initialConfig={globalConfig}
+        onSave={setGlobal}
+      />
+    );
+  };
+
   // Memoize options so Dropdown doesn't lose focus / reset scroll position
   const slotOptions = useMemo(() => {
     if (!slotsData) return [];
@@ -210,6 +287,23 @@ function Content() {
         </PanelSectionRow>
       </PanelSection>
 
+      <PanelSection>
+        <PanelSectionRow>
+          <ButtonItem
+            layout="below"
+            onClick={openSettings}
+            disabled={isDaemonRunning}
+          >
+            Settings
+          </ButtonItem>
+        </PanelSectionRow>
+        {isDaemonRunning && (
+          <div style={{ padding: "5px 10px 0 10px", fontSize: "11px", color: "#ffcc00", lineHeight: "1.3" }}>
+            Stop the daemon to change trigger settings.
+          </div>
+        )}
+      </PanelSection>
+
       <PanelSection title="Active Macro Slot">
         <PanelSectionRow>
           <Dropdown
@@ -240,29 +334,14 @@ function Content() {
         </PanelSectionRow>
       </PanelSection>
 
-      <PanelSection title="Trigger buttons">
-        <div style={{ fontSize: "11px", color: "#bbb", marginBottom: "15px", lineHeight: "1.3" }}>
-          Hold for 0.5 seconds to activate. Record button works as a toggle, starts and ends the recording.
-        </div>
-        
+      <PanelSection title="Notifications">
         <PanelSectionRow>
-          <div style={{ marginBottom: "5px" }}><b>Record Trigger:</b></div>
-          <Dropdown
-            rgOptions={btnOptions}
-            selectedOption={globalConfig.trigger_record_code}
-            onChange={(opt: any) => {
-              setTimeout(() => setGlobal({ ...globalConfig, trigger_record_code: opt.data }), 0);
-            }}
-          />
-        </PanelSectionRow>
-
-        <PanelSectionRow>
-          <div style={{ marginTop: "10px", marginBottom: "5px" }}><b>Replay Trigger:</b></div>
-          <Dropdown
-            rgOptions={btnOptions}
-            selectedOption={globalConfig.trigger_replay_code}
-            onChange={(opt: any) => {
-              setTimeout(() => setGlobal({ ...globalConfig, trigger_replay_code: opt.data }), 0);
+          <ToggleField
+            label="Show info toasts"
+            description="Show status toasts (recording started/saved, playback started/finished). Error toasts are always shown."
+            checked={globalConfig.show_info_toasts ?? true}
+            onChange={(val: boolean) => {
+              setTimeout(() => setGlobal({ ...globalConfig, show_info_toasts: val }), 0);
             }}
           />
         </PanelSectionRow>
@@ -272,18 +351,21 @@ function Content() {
 }
 
 
-const getNotifications = callable<[], string[]>("get_notifications");
+const getNotifications = callable<[], { message: string; error?: boolean }[]>("get_notifications");
 
 export default definePlugin(() => {
   const interval = setInterval(async () => {
     try {
       const res = await getNotifications();
       if (res && res.length > 0) {
-        for (const msg of res) {
+        for (const n of res) {
+          const isError = !!n?.error;
+          // Error toasts are always shown; info toasts honour the setting.
+          if (!isError && !showInfoToasts) continue;
           toaster.toast({
-            title: "Decky Macro",
-            body: msg,
-            duration: 1500,
+            title: isError ? "Decky Macro (error)" : "Decky Macro",
+            body: n?.message ?? String(n),
+            duration: isError ? 4000 : 1500,
             sound: 0,
           });
         }

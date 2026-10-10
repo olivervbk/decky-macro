@@ -3,7 +3,19 @@ import os
 import subprocess
 import json
 import threading
+import traceback
 import decky_plugin
+
+# Default global config. `hold_duration_ms` is how long the record/replay
+# trigger buttons must be held before activating (0 = trigger on press).
+# `show_info_toasts` controls whether informational status toasts are shown;
+# error toasts are always shown regardless of this setting.
+DEFAULT_CONFIG = {
+    "trigger_record_code": 317,
+    "trigger_replay_code": 318,
+    "hold_duration_ms": 500,
+    "show_info_toasts": True,
+}
 
 class Plugin:
     process = None
@@ -24,7 +36,7 @@ class Plugin:
         # Ensure default config
         if not os.path.exists(self.config_path):
             with open(self.config_path, "w") as f:
-                json.dump({"trigger_record_code": 317, "trigger_replay_code": 318}, f)
+                json.dump(dict(DEFAULT_CONFIG), f, indent=4)
 
         # Ensure default data.json
         if not os.path.exists(self.data_path):
@@ -70,26 +82,33 @@ class Plugin:
             )
             
             def log_output(pipe):
+                def notify(message, error=False):
+                    self.notifications.append({"message": message, "error": error})
+
                 with pipe:
                     for line in iter(pipe.readline, b''):
                         line_str = line.decode('utf-8', errors='replace').strip()
                         decky_plugin.logger.info(f"[Rust] {line_str}")
-                        
+
                         if "Started recording to" in line_str:
-                            self.notifications.append("Recording Started")
+                            notify("Recording Started")
                         elif "Stopped recording. Saved" in line_str:
-                            self.notifications.append("Recording Saved")
+                            notify("Recording Saved")
+                        elif "Recording stopped with no inputs" in line_str:
+                            notify("No inputs recorded - nothing saved", error=True)
                         elif "Started playback from" in line_str:
-                            self.notifications.append("Playback Started")
+                            notify("Playback Started")
                         elif "Playback finished." in line_str:
-                            self.notifications.append("Playback Finished")
+                            notify("Playback Finished")
                         elif "Playback cancelled by physical input" in line_str:
-                            self.notifications.append("Playback Cancelled")
+                            notify("Playback Cancelled")
+                        elif "Playback failed: no recorded inputs" in line_str:
+                            notify("No macro recorded for this slot", error=True)
                         
             threading.Thread(target=log_output, args=(Plugin.process.stdout,), daemon=True).start()
             return True
         except Exception as e:
-            decky_plugin.logger.error(f"Failed to start daemon: {e}")
+            decky_plugin.logger.error(f"Failed to start daemon: {e}\n{traceback.format_exc()}")
             return False
 
     def stop_daemon(self):
@@ -105,20 +124,29 @@ class Plugin:
         return res
 
     async def get_config(self) -> dict:
+        config = dict(DEFAULT_CONFIG)
         if os.path.exists(self.config_path):
-            with open(self.config_path, "r") as f:
-                return json.load(f)
-        return {"trigger_record_code": 317, "trigger_replay_code": 318}
+            try:
+                with open(self.config_path, "r") as f:
+                    config.update(json.load(f))
+            except Exception as e:
+                decky_plugin.logger.error(
+                    f"Failed to read config from {self.config_path}: {e}\n{traceback.format_exc()}"
+                )
+        return config
 
     async def save_config(self, config: dict) -> bool:
+        # Trigger/replay/hold settings are only read by the daemon at startup, so
+        # the UI restricts editing them to when the daemon is stopped. We no longer
+        # signal a running daemon here to reload (that behaviour was removed).
         try:
             with open(self.config_path, "w") as f:
                 json.dump(config, f, indent=4)
-            if await self.get_daemon_state():
-                import signal
-                Plugin.process.send_signal(signal.SIGHUP)
+            decky_plugin.logger.info("Config saved. Trigger/hold changes apply on next daemon start.")
             return True
-        except: return False
+        except Exception as e:
+            decky_plugin.logger.error(f"Failed to save config to {self.config_path}: {e}\n{traceback.format_exc()}")
+            return False
 
     async def get_slots_data(self) -> dict:
         return self._get_data()
@@ -130,7 +158,9 @@ class Plugin:
             if await self.get_daemon_state():
                 self.start_daemon()
             return True
-        except: return False
+        except Exception as e:
+            decky_plugin.logger.error(f"Failed to save slots data to {self.data_path}: {e}\n{traceback.format_exc()}")
+            return False
 
     async def get_daemon_state(self) -> bool:
         if Plugin.process is None: return False

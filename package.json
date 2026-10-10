@@ -9,26 +9,29 @@
     "build:static": "DECKY_MACRO_TARGET=static sh backend/build.sh && rollup -c",
     "package": "mkdir -p target/decky-macro && cp -r bin dist assets main.py plugin.json package.json target/decky-macro/",
     "clean": "rm -rf target",
+    "make": "pnpm run clean && pnpm run build && pnpm run package",
+    "make:static": "pnpm run clean && pnpm run build:static && pnpm run package",
     "watch": "rollup -c -w",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/SteamDeckHomebrew/decky-macro-daemon-plugin.git"
+    "url": "git+https://github.com/olivervbk/decky-macro-daemon-plugin.git"
   },
   "keywords": [
     "decky",
     "plugin",
-    "plugin-template",
     "steam-deck",
-    "deck"
+    "deck",
+    "macro",
+    "input-recording"
   ],
   "author": "Oliver K<olivervbk@gmail.com>",
   "license": "BSD-3-Clause",
   "bugs": {
-    "url": "https://github.com/SteamDeckHomebrew/decky-macro-daemon-plugin/issues"
+    "url": "https://github.com/olivervbk/decky-macro-daemon-plugin/issues"
   },
-  "homepage": "https://github.com/SteamDeckHomebrew/decky-macro-daemon-plugin#readme",
+  "homepage": "https://github.com/olivervbk/decky-macro-daemon-plugin#readme",
   "devDependencies": {
     "@decky/rollup": "^1.0.2",
     "@decky/ui": "^4.11.0",
