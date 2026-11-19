@@ -13,7 +13,9 @@ import {
 import {
   callable,
   toaster,
-  definePlugin
+  definePlugin,
+  addEventListener,
+  removeEventListener
 } from "@decky/api"
 
 import { useState, useEffect, useMemo } from "react";
@@ -26,7 +28,7 @@ const saveSlotsData = callable<[data: any], boolean>("save_slots_data");
 const getDaemonState = callable<[], boolean>("get_daemon_state");
 const setDaemonState = callable<[is_running: boolean], boolean>("set_daemon_state");
 
-// Module-level flag read by the notification poller, which runs on the plugin
+// Module-level flag read by the notification listener, which runs on the plugin
 // instance (outside <Content/>) and therefore has no access to the config state.
 // Error toasts are always shown; info toasts honour this flag. <Content/> keeps
 // it in sync with the `show_info_toasts` global config value.
@@ -156,7 +158,7 @@ function Content() {
     getDaemonState().then(setIsDaemonRunning);
   }, []);
 
-  // Keep the module-level toast flag (read by the notification poller) in sync.
+  // Keep the module-level toast flag (read by the notification listener) in sync.
   useEffect(() => {
     showInfoToasts = globalConfig ? (globalConfig.show_info_toasts ?? true) : true;
   }, [globalConfig]);
@@ -351,29 +353,23 @@ function Content() {
 }
 
 
-const getNotifications = callable<[], { message: string; error?: boolean }[]>("get_notifications");
-
 export default definePlugin(() => {
-  const interval = setInterval(async () => {
-    try {
-      const res = await getNotifications();
-      if (res && res.length > 0) {
-        for (const n of res) {
-          const isError = !!n?.error;
-          // Error toasts are always shown; info toasts honour the setting.
-          if (!isError && !showInfoToasts) continue;
-          toaster.toast({
-            title: isError ? "Decky Macro (error)" : "Decky Macro",
-            body: n?.message ?? String(n),
-            duration: isError ? 4000 : 1500,
-            sound: 0,
-          });
-        }
-      }
-    } catch (e) {
-      // ignore
+  // The backend pushes daemon status via decky.emit("notification", message, error)
+  // only when something happens, so there is no polling.
+  const notificationListener = addEventListener<[message: string, error: boolean]>(
+    "notification",
+    (message, error) => {
+      const isError = !!error;
+      // Error toasts are always shown; info toasts honour the setting.
+      if (!isError && !showInfoToasts) return;
+      toaster.toast({
+        title: isError ? "Decky Macro (error)" : "Decky Macro",
+        body: message,
+        duration: isError ? 4000 : 1500,
+        sound: 0,
+      });
     }
-  }, 1000);
+  );
 
   return {
     name: "Decky Macro",
@@ -381,7 +377,7 @@ export default definePlugin(() => {
     content: <Content />,
     icon: <FaGamepad />,
     onDismount() {
-      clearInterval(interval);
+      removeEventListener("notification", notificationListener);
     },
   };
 });

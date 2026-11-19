@@ -41,13 +41,19 @@ Because this plugin contains a compiled Rust backend, you must build it using No
    ```bash
    pnpm install
    ```
-4. Build and assemble a deployable plugin folder:
+4. Build and package the plugin:
+   ```bash
+   pnpm run dist              # all of the below, using the static musl daemon
+   ```
+   or step by step:
    ```bash
    pnpm run build             # frontend bundle -> dist/
    pnpm run build:backend     # Rust daemon -> bin/   (or build:backend:static)
-   pnpm run package           # -> target/decky-macro/
+   pnpm run package           # -> target/decky-macro/ and target/decky-macro-v<version>.zip
    ```
-5. Move the resulting `target/decky-macro` folder to your Steam Deck's `~/homebrew/plugins/` directory and restart your Deck.
+5. Install it on your Steam Deck, either:
+   - from the zip, using Decky's developer setting **Install Plugin from ZIP**, or
+   - by copying the `target/decky-macro` folder to `~/homebrew/plugins/` and restarting your Deck.
 
 ### How the backend is built
 

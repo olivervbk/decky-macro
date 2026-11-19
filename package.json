@@ -1,13 +1,14 @@
 {
   "name": "decky-macro-daemon-plugin",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "description": "A template to quickly create decky plugins from scratch, based on TypeScript and webpack",
   "type": "module",
   "scripts": {
     "build": "rollup -c",
     "build:backend": "sh backend/build.sh",
     "build:backend:static": "DECKY_MACRO_TARGET=static sh backend/build.sh",
-    "package": "rm -rf target/decky-macro && mkdir -p target/decky-macro && cp -r bin dist assets main.py plugin.json package.json target/decky-macro/",
+    "package": "sh scripts/package.sh",
+    "dist": "pnpm run build && pnpm run build:backend:static && pnpm run package",
     "watch": "rollup -c -w",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

@@ -4,7 +4,8 @@ import subprocess
 import json
 import threading
 import traceback
-import decky_plugin
+import asyncio
+import decky
 
 # Default global config. `hold_duration_ms` is how long the record/replay
 # trigger buttons must be held before activating (0 = trigger on press).
@@ -17,15 +18,24 @@ DEFAULT_CONFIG = {
     "show_info_toasts": True,
 }
 
+def _log_emit_error(future):
+    # Futures from run_coroutine_threadsafe are never awaited, so surface errors here.
+    try:
+        exc = future.exception()
+    except Exception as e:  # cancelled
+        exc = e
+    if exc is not None:
+        decky.logger.error(f"Failed to emit notification: {exc}")
+
+
 class Plugin:
     process = None
 
     def __init__(self):
-        self.config_dir = decky_plugin.DECKY_PLUGIN_SETTINGS_DIR
+        self.config_dir = decky.DECKY_PLUGIN_SETTINGS_DIR
         self.config_path = os.path.join(self.config_dir, "config.json")
         self.data_path = os.path.join(self.config_dir, "data.json")
-        self.bin_path = os.path.join(decky_plugin.DECKY_PLUGIN_DIR, "bin", "decky-macro-daemon")
-        self.notifications = []
+        self.bin_path = os.path.join(decky.DECKY_PLUGIN_DIR, "bin", "decky-macro-daemon")
 
         if not os.path.exists(self.config_dir):
             os.makedirs(self.config_dir)
@@ -56,7 +66,7 @@ class Plugin:
     def start_daemon(self) -> bool:
         self.stop_daemon()
         if not os.path.exists(self.bin_path):
-            decky_plugin.logger.error(f"Cannot start daemon: binary not found at {self.bin_path}")
+            decky.logger.error(f"Cannot start daemon: binary not found at {self.bin_path}")
             return False
             
         try:
@@ -68,7 +78,7 @@ class Plugin:
             cancel = "true" if slot_config.get("cancel_on_input", True) else "false"
             macro_file = os.path.join(self.config_dir, f"macro_{active_slot}.json")
 
-            decky_plugin.logger.info(f"Starting decky-macro-daemon daemon for slot {active_slot}...")
+            decky.logger.info(f"Starting decky-macro-daemon daemon for slot {active_slot}...")
             Plugin.process = subprocess.Popen(
                 [
                     self.bin_path, 
@@ -81,14 +91,32 @@ class Plugin:
                 stderr=subprocess.STDOUT
             )
             
+            # start_daemon is only called from async callables, so a loop is
+            # running here. The reader thread below uses it to push toasts to
+            # the frontend via decky.emit (instead of the frontend polling).
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+                decky.logger.warning("No running event loop; daemon notifications will not be sent.")
+
             def log_output(pipe):
                 def notify(message, error=False):
-                    self.notifications.append({"message": message, "error": error})
+                    if loop is None or loop.is_closed():
+                        return
+                    try:
+                        future = asyncio.run_coroutine_threadsafe(
+                            decky.emit("notification", message, error), loop
+                        )
+                        future.add_done_callback(_log_emit_error)
+                    except RuntimeError as e:
+                        # Loop shut down between the check and the call (plugin unload).
+                        decky.logger.debug(f"Dropped notification '{message}': {e}")
 
                 with pipe:
                     for line in iter(pipe.readline, b''):
                         line_str = line.decode('utf-8', errors='replace').strip()
-                        decky_plugin.logger.info(f"[Rust] {line_str}")
+                        decky.logger.info(f"[Rust] {line_str}")
 
                         if "Started recording to" in line_str:
                             notify("Recording Started")
@@ -108,20 +136,15 @@ class Plugin:
             threading.Thread(target=log_output, args=(Plugin.process.stdout,), daemon=True).start()
             return True
         except Exception as e:
-            decky_plugin.logger.error(f"Failed to start daemon: {e}\n{traceback.format_exc()}")
+            decky.logger.error(f"Failed to start daemon: {e}\n{traceback.format_exc()}")
             return False
 
     def stop_daemon(self):
         if Plugin.process:
-            decky_plugin.logger.info("Stopping decky-macro-daemon daemon...")
+            decky.logger.info("Stopping decky-macro-daemon daemon...")
             Plugin.process.terminate()
             Plugin.process.wait()
             Plugin.process = None
-
-    async def get_notifications(self) -> list:
-        res = self.notifications.copy()
-        self.notifications.clear()
-        return res
 
     async def get_config(self) -> dict:
         config = dict(DEFAULT_CONFIG)
@@ -130,7 +153,7 @@ class Plugin:
                 with open(self.config_path, "r") as f:
                     config.update(json.load(f))
             except Exception as e:
-                decky_plugin.logger.error(
+                decky.logger.error(
                     f"Failed to read config from {self.config_path}: {e}\n{traceback.format_exc()}"
                 )
         return config
@@ -142,10 +165,10 @@ class Plugin:
         try:
             with open(self.config_path, "w") as f:
                 json.dump(config, f, indent=4)
-            decky_plugin.logger.info("Config saved. Trigger/hold changes apply on next daemon start.")
+            decky.logger.info("Config saved. Trigger/hold changes apply on next daemon start.")
             return True
         except Exception as e:
-            decky_plugin.logger.error(f"Failed to save config to {self.config_path}: {e}\n{traceback.format_exc()}")
+            decky.logger.error(f"Failed to save config to {self.config_path}: {e}\n{traceback.format_exc()}")
             return False
 
     async def get_slots_data(self) -> dict:
@@ -159,7 +182,7 @@ class Plugin:
                 self.start_daemon()
             return True
         except Exception as e:
-            decky_plugin.logger.error(f"Failed to save slots data to {self.data_path}: {e}\n{traceback.format_exc()}")
+            decky.logger.error(f"Failed to save slots data to {self.data_path}: {e}\n{traceback.format_exc()}")
             return False
 
     async def get_daemon_state(self) -> bool:
